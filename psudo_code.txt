@@ -1,0 +1,106 @@
+===================================================================
+                        Weights Randomization - class methodes
+===================================================================
+func rand_array(arr):
+    random_indicies = random.permutsion([0....length(arr)])
+    random_array = [arr[i] for every i in random_indicies] // random_array[i] = arr[random_indicies[i]]
+    retrive_map = []
+    if demension(array) > 1:
+        for i, index in random_indicies:
+            chiled_array, chiled_indices = rand_array(arr[index])
+            random_array[i] = chiled_array
+            retrive_map.add(tuple(index, chiled_indices))
+    else:
+        for every i in random_indicies:
+            retrive_map.add(tuple(i,None))
+    return random_array, retrive_map
+
+
+func randomize(weight_as_list, seed)
+    if seed is -1:
+        seed = randomly_generated_seed_using_time
+    random.seed = seed
+    return rand_array(weight_as_list)
+
+
+func change_weights(seed):
+    counter = 0
+    for every tensor in tf_model:
+        counter++
+        weight_as_list = tensor.weights.to_list()
+        new_weight_list, map_of_weights = randomize(weight_as_list, seed)
+        global_model_map.add(map_of_weights)
+        tensor.weights.from_list(new_weight_list)
+
+===================================================================
+                        Weights Retrieve - class methodes
+===================================================================
+
+func retrive(weight_as_list, retrive_map):
+    retrieved_array = [None ..... None] //length shood be weight_as_list length
+    for i, indice_tuple:
+        if indice_tuple[1] is None: // (number, list or None) here its None
+            retrieved_array[indice_tuple[0]] = random_array[i]
+        else:  // (number, list or None) here its list
+            retrieved_array[index[0]] = retrieve(randomized_array[i], indice_tuple[1])
+    return retrieved_array
+func retrive_weights():
+    counter = 0
+    for every tensor in tf_model:
+        weight_as_list = tensor.weights.to_list()
+        org_weights = retrive(weight_as_list, global_model_map[counter])
+        tensor.weights.from_list(org_weights)
+        counter++
+
+
+===================================================================
+                        Model Obfuscation
+===================================================================
+func switch_blocks(model, target_layer, block_idx1, block_idx2):
+    check_exist(model,target_layer) return if no
+    layer_structure = get_layer_architecture(model,name)
+    check_exist(layer_structure, block_idx1, block_idx2) return in no
+    layer_structure[block_idx1],layer_structure[block_idx2]= layer_structure[block_idx2],layer_structure[block_idx1]
+
+
+func model_obfuscation(model):
+    layers_names = model.get_layer_names.as_list()
+    switch_dict = {}
+    for every name in layers_names:
+        layer_structure = get_layer_architecture(model,name)
+        choosing_array = [0 .... length(layer_structure)]
+        layer_switch = []
+        while choosing_array not empty:
+            rand_i = choose_and_remove_element_at_random(choosing_array)
+            rand_j = rand_i
+            if choosing_array not empty:
+                rand_j = choose_and_remove_element_at_random(choosing_array)
+            layer_switch.add(tuple(rand_i,rand_j))
+            switch_blocks(model, name, rand_j, rand_i)
+        switch_dict[name] = layer_switch
+    return switch_dict
+
+===================================================================
+                        Model Deobfuscation
+===================================================================
+
+func model_deobfuscation(model, obf_dict):
+    for key, data in obf_dict.items:
+        for switch in data:
+            switch_blocks(model, key, switch[0], switch[1])
+
+
+===================================================================
+                        Model Functions - class methodes global_model_map and tf_model shood be class veribales
+===================================================================
+
+func save()
+    change_weights(seed=-1)//-1 for random
+    obf_dict = model_obfuscation(tf_model)
+    Serialization.dump_all(tf_model,global_model_map,obf_dict)
+
+
+func load()
+    Serialization.load_all(tf_mode,global_model_map,obf_dict) // the model need to be the one we saved 
+    model_deobfuscation(tf_model)
+    self.retrive_weights()

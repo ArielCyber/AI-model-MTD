@@ -108,3 +108,26 @@ def verify_shuffling(original, shuffled, dimension):
     total_elements = np.prod(original.shape)
     changed = np.sum(original != shuffled)
     return (changed / total_elements) * 100
+
+
+def shuffle(arr, seed=None):
+    shape = arr.shape
+
+    ret = arr.copy().ravel()
+
+    rng = np.random.default_rng(seed)
+    idxs_perm = rng.permutation(arr.size)
+
+    ret = ret[idxs_perm]
+
+    return ret.reshape(shape), idxs_perm
+
+def recover(arr, idxs_perm):
+    shape = arr.shape
+
+    ret = arr.copy().ravel()
+
+    ret = ret[np.argsort(idxs_perm)]
+
+    return ret.reshape(shape)
+    

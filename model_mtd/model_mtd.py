@@ -129,7 +129,7 @@ class MTDModel:
         model_weights_shuffle_idxs = []
 
         for i, tensor in enumerate(self.model.parameters()):
-            shuffled, indices = shuffle_all_axes(tensor.data.cpu().detach().numpy())
+            shuffled, indices = shuffle(tensor.data.cpu().detach().numpy())
 
             model_weights_shuffle_idxs.append(indices)
 
@@ -147,7 +147,7 @@ class MTDModel:
             return
 
         for i, tensor in enumerate(self.model.parameters()):
-            orig = recover_original(tensor.data.cpu().detach().numpy(), self.model_weights_shuffle_idxs[i])
+            orig = recover(tensor.data.cpu().detach().numpy(), self.model_weights_shuffle_idxs[i])
             orig_tensor = torch.tensor(orig)
 
             with torch.no_grad():

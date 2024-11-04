@@ -1,5 +1,6 @@
 import random
 from typing import IO, Optional, Union
+import io
 import torch
 import torchvision.models as models
 from model_mtd.arr_shuffle import *
@@ -80,8 +81,19 @@ def _pickle_save(obj, file_obj_or_path: Union[str, IO], close_file=True):
         if close_file:
             file_obj_or_path.close()
 
+def _torch_load(file_obj_or_path: Union[str, IO], close_file=True):
+    model = torch.load(file_obj_or_path, weights_only=False)
+    if isinstance(file_obj_or_path, io.IOBase) and close_file:
+        file_obj_or_path.close()
+    return model
+
+def _torch_save(model, file_obj_or_path: Union[str, IO], close_file=True):
+    torch.save(model, file_obj_or_path)
+    if isinstance(file_obj_or_path, io.IOBase) and close_file:
+        file_obj_or_path.close()
+
 class MTDModel:
-    def __init__(self, model=None, model_weights_shuffle_idxs=None, model_block_shuffle_map=None):
+    def __init__(self, model=None, shuffle_weights=True, switch_blocks=False, model_weights_shuffle_idxs=None, model_block_shuffle_map=None):
         if model is None:
             logger.warning("Model is None. Please provide a model.")
             return
@@ -94,14 +106,19 @@ class MTDModel:
         self.model_weights_shuffle_idxs = model_weights_shuffle_idxs
         self.model_block_shuffle_map = model_block_shuffle_map
 
+        self.shuffle_weights = shuffle_weights or model_weights_shuffle_idxs
+        self.switch_blocks = switch_blocks or model_block_shuffle_map
+
     @staticmethod
     def _load_model_pickle(file_obj_or_path: Union[str, IO], close_file=True):
-        model = _pickle_load(file_obj_or_path, close_file=close_file)
+        # model = _pickle_load(file_obj_or_path, close_file=close_file)
+        model = _torch_load(file_obj_or_path, close_file=close_file)
         return model
             
     @staticmethod
     def _save_model_pickle(model, file_obj_or_path: Union[str, IO], close_file=True):
-        _pickle_save(model, file_obj_or_path, close_file=close_file)
+        # _pickle_save(model, file_obj_or_path, close_file=close_file)
+        _torch_save(model, file_obj_or_path, close_file=close_file)
 
     @staticmethod
     def _load_model_weights_shuffle_idxs_pickle(file_obj_or_path: Union[str, IO], close_file=True):
@@ -123,7 +140,10 @@ class MTDModel:
 
     
     def is_objuscated(self) -> bool:
-        return self.model_weights_shuffle_idxs and self.model_block_shuffle_map
+        if not self.shuffle_weights and not self.switch_blocks:
+            logger.warning("Both shuffle_weights and switch_blocks are False. Model can't be obfuscated.")
+
+        return (not self.is_objuscated or self.model_weights_shuffle_idxs) and (not self.switch_blocks or self.model_block_shuffle_map)
     
     def _change_weights(self,seed:Optional[int] = None):
         model_weights_shuffle_idxs = []
@@ -160,8 +180,14 @@ class MTDModel:
             logger.warning("Model has already been obfuscated. To re-obfuscate, set override=True.")
             return
 
-        model_weights_shuffle_idxs = self._change_weights(seed=seed)
-        model_block_shuffle_map = model_obfuscation(self.model)
+        model_weights_shuffle_idxs = None
+        model_block_shuffle_map = None
+
+        if self.shuffle_weights:
+            model_weights_shuffle_idxs = self._change_weights(seed=seed)
+
+        if self.switch_blocks:
+            model_block_shuffle_map = model_obfuscation(self.model)
 
         self.model_weights_shuffle_idxs = model_weights_shuffle_idxs
         self.model_block_shuffle_map = model_block_shuffle_map
@@ -173,8 +199,11 @@ class MTDModel:
             logger.warning("Model has not been obfuscated.")
             return
 
-        model_deobfuscation(self.model, self.model_block_shuffle_map)
-        self._retrive_weights()
+        if self.switch_blocks:
+            model_deobfuscation(self.model, self.model_block_shuffle_map)
+
+        if self.shuffle_weights:
+            self._retrive_weights()
 
         self.model_weights_shuffle_idxs = None
         self.model_block_shuffle_map = None
@@ -202,8 +231,13 @@ class MTDModel:
         mtd_model = cls(model=model, model_weights_shuffle_idxs=model_weights_shuffle_idxs, model_block_shuffle_map=model_block_shuffle_map)
         return mtd_model
 
+    def __eq__(self, value):
+        return self.validate_model(value)
+
     def validate_model(self, other_model):
         for p1, p2 in zip(self.model.parameters(), other_model.model.parameters()):
             if not torch.allclose(p1.data, p2.data, atol=1e-4):
                 return False
         return True
+    
+__all__ = ["MTDModel"]

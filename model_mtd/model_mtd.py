@@ -1,4 +1,5 @@
 import random
+from typing import IO, Union
 import torch
 import torchvision.models as models
 from model_mtd.arr_shuffle import *
@@ -60,6 +61,25 @@ def model_deobfuscation(model, obf_dict):
             # Switch the positions of two blocks in 'layer1' (e.g., blocks 0 and 3)
             switch_blocks(model, target_layer=key, block_idx1=switch[0], block_idx2=switch[1])
 
+def _pickle_load(file_obj_or_path: Union[str, IO], close_file=True):
+    if isinstance(file_obj_or_path, str):
+        with open(file_obj_or_path, "rb") as f:
+            obj = pickle.load(f)
+    else:
+        obj = pickle.load(file_obj_or_path)
+        if close_file:
+            file_obj_or_path.close()
+    return obj
+
+def _pickle_save(obj, file_obj_or_path: Union[str, IO], close_file=True):
+    if isinstance(file_obj_or_path, str):
+        with open(file_obj_or_path, "wb") as f:
+            pickle.dump(obj, f)
+    else:
+        pickle.dump(obj, file_obj_or_path)
+        if close_file:
+            file_obj_or_path.close()
+
 class MTDModel:
     def __init__(self, model=None, model_weights_shuffle_idxs=None, model_block_shuffle_map=None):
         if model is None:
@@ -74,18 +94,38 @@ class MTDModel:
         self.model_weights_shuffle_idxs = model_weights_shuffle_idxs
         self.model_block_shuffle_map = model_block_shuffle_map
 
-    def load_model_pickle(self,file_path):
-        with open(file_path,"rb") as f:
-            self.model = pickle.load(f)
+    @staticmethod
+    def _load_model_pickle(file_obj_or_path: Union[str, IO], close_file=True):
+        model = _pickle_load(file_obj_or_path, close_file=close_file)
+        return model
             
-    def save_model_pickle(self,file_path):
-        with open(file_path,"wb") as f:
-            pickle.dump(self.model,f)
+    @staticmethod
+    def _save_model_pickle(model, file_obj_or_path: Union[str, IO], close_file=True):
+        _pickle_save(model, file_obj_or_path, close_file=close_file)
 
+    @staticmethod
+    def _load_model_weights_shuffle_idxs_pickle(file_obj_or_path: Union[str, IO], close_file=True):
+        model_weights_shuffle_idxs = _pickle_load(file_obj_or_path, close_file=close_file)
+        return model_weights_shuffle_idxs
+    
+    @staticmethod
+    def _save_model_weights_shuffle_idxs_pickle(model_weights_shuffle_idxs, file_obj_or_path: Union[str, IO], close_file=True):
+        _pickle_save(model_weights_shuffle_idxs, file_obj_or_path, close_file=close_file)
+
+    @staticmethod
+    def _load_model_block_shuffle_map_pickle(file_obj_or_path: Union[str, IO], close_file=True):
+        model_block_shuffle_map = _pickle_load(file_obj_or_path, close_file=close_file)
+        return model_block_shuffle_map
+    
+    @staticmethod
+    def _save_model_block_shuffle_map_pickle(model_block_shuffle_map, file_obj_or_path: Union[str, IO], close_file=True):
+        _pickle_save(model_block_shuffle_map, file_obj_or_path, close_file=close_file)
+
+    
     def is_objuscated(self) -> bool:
         return self.model_weights_shuffle_idxs and self.model_block_shuffle_map
     
-    def change_weights(self,seed):
+    def _change_weights(self,seed):
         model_weights_shuffle_idxs = []
 
         for i, tensor in enumerate(self.model.parameters()):
@@ -101,7 +141,11 @@ class MTDModel:
         self.model_weights_shuffle_idxs = model_weights_shuffle_idxs
         return model_weights_shuffle_idxs
 
-    def retrive_weights(self):
+    def _retrive_weights(self):
+        if not self.model_weights_shuffle_idxs:
+            logger.warning("Model weights have not been shuffled.")
+            return
+
         for i, tensor in enumerate(self.model.parameters()):
             orig = recover_original(tensor.data.cpu().detach().numpy(), self.model_weights_shuffle_idxs[i])
             orig_tensor = torch.tensor(orig)
@@ -116,7 +160,7 @@ class MTDModel:
             logger.warning("Model has already been obfuscated. To re-obfuscate, set override=True.")
             return
 
-        model_weights_shuffle_idxs = self.change_weights(seed=seed)
+        model_weights_shuffle_idxs = self._change_weights(seed=seed)
         model_block_shuffle_map = model_obfuscation(self.model)
 
         self.model_weights_shuffle_idxs = model_weights_shuffle_idxs
@@ -130,27 +174,30 @@ class MTDModel:
             return
 
         model_deobfuscation(self.model, self.model_block_shuffle_map)
-        self.retrive_weights()
+        self._retrive_weights()
 
         self.model_weights_shuffle_idxs = None
         self.model_block_shuffle_map = None
 
-    def save_mtd(self, file_path, map_path,model_map_path):
-        with open(file_path,"wb") as f:
-            pickle.dump(self.model,f)
-        with open(map_path,"wb") as f:
-            pickle.dump(self.model_weights_shuffle_idxs,f)
-        with open(model_map_path,"wb") as f:
-            pickle.dump(self.model_block_shuffle_map,f)
+    def save_mtd(self, 
+                model_file_or_path: Union[str, IO],
+                model_weights_shuffle_idxs_file_or_path: Union[str, IO],
+                model_block_shuffle_map_file_or_path: Union[str, IO],
+                close_files=True):
+        
+        self._save_model_pickle(self.model, model_file_or_path, close_file=close_files)
+        self._save_model_weights_shuffle_idxs_pickle(self.model_weights_shuffle_idxs, model_weights_shuffle_idxs_file_or_path, close_file=close_files)
+        self._save_model_block_shuffle_map_pickle(self.model_block_shuffle_map, model_block_shuffle_map_file_or_path, close_file=close_files)
 
     @classmethod
-    def load_mtd(cls, file_path,map_path,model_map_path):
-        with open(model_map_path,"rb") as f:
-            model_block_shuffle_map = pickle.load(f)
-        with open(file_path,"rb") as f:
-            model = pickle.load(f)
-        with open(map_path,"rb") as f:
-            model_weights_shuffle_idxs = pickle.load(f)
+    def load_mtd(cls,
+                model_file_or_path: Union[str, IO],
+                model_weights_shuffle_idxs_file_or_path: Union[str, IO],
+                model_block_shuffle_map_file_or_path: Union[str, IO],
+                close_files=True):
+        model = cls._load_model_pickle(model_file_or_path, close_file=close_files)
+        model_weights_shuffle_idxs = cls._load_model_weights_shuffle_idxs_pickle(model_weights_shuffle_idxs_file_or_path, close_file=close_files)
+        model_block_shuffle_map = cls._load_model_block_shuffle_map_pickle(model_block_shuffle_map_file_or_path, close_file=close_files)
 
         mtd_model = cls(model=model, model_weights_shuffle_idxs=model_weights_shuffle_idxs, model_block_shuffle_map=model_block_shuffle_map)
         return mtd_model

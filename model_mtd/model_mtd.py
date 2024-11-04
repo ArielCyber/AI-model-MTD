@@ -62,6 +62,14 @@ def model_deobfuscation(model, obf_dict):
 
 class MTDModel:
     def __init__(self, model=None, map_model=None, obf_dict=None):
+        if model is None:
+            logger.warning("Model is None. Please provide a model.")
+            return
+        
+        if not isinstance(model, torch.nn.Module):
+            logger.warning("Model is not an instance of torch.nn.Module. MTDModel currently only supports PyTorch models.")
+            raise NotImplementedError("Model is not an instance of torch.nn.Module. MTDModel currently only supports PyTorch models.")
+
         self.model = model
         self.map_model = map_model
         self.obf_dict = obf_dict

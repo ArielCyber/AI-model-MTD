@@ -1,6 +1,6 @@
+import random
 import torch
 import torchvision.models as models
-from model_mtd.ArrayRandomization import *
 from model_mtd.arr_shuffle import *
 import pickle
 
@@ -61,7 +61,7 @@ def model_deobfuscation(model, obf_dict):
             switch_blocks(model, target_layer=key, block_idx1=switch[0], block_idx2=switch[1])
 
 class MTDModel:
-    def __init__(self, model=None, map_model=None, obf_dict=None):
+    def __init__(self, model=None, model_weights_shuffle_idxs=None, model_block_shuffle_map=None):
         if model is None:
             logger.warning("Model is None. Please provide a model.")
             return
@@ -71,8 +71,8 @@ class MTDModel:
             raise NotImplementedError("Model is not an instance of torch.nn.Module. MTDModel currently only supports PyTorch models.")
 
         self.model = model
-        self.map_model = map_model
-        self.obf_dict = obf_dict
+        self.model_weights_shuffle_idxs = model_weights_shuffle_idxs
+        self.model_block_shuffle_map = model_block_shuffle_map
 
     def load_model_pickle(self,file_path):
         with open(file_path,"rb") as f:
@@ -83,44 +83,44 @@ class MTDModel:
             pickle.dump(self.model,f)
 
     def is_objuscated(self) -> bool:
-        return self.map_model and self.obf_dict
+        return self.model_weights_shuffle_idxs and self.model_block_shuffle_map
     
     def change_weights(self,seed):
-        map_model = []
+        model_weights_shuffle_idxs = []
 
         for i, tensor in enumerate(self.model.parameters()):
             shuffled, indices = shuffle_all_axes(tensor.data.cpu().detach().numpy())
 
-            map_model.append(indices)
+            model_weights_shuffle_idxs.append(indices)
 
             shuffled_tensor = torch.tensor(shuffled)
 
             with torch.no_grad():
                 tensor.data = shuffled_tensor
 
-        self.map_model = map_model
-        return map_model
+        self.model_weights_shuffle_idxs = model_weights_shuffle_idxs
+        return model_weights_shuffle_idxs
 
     def retrive_weights(self):
         for i, tensor in enumerate(self.model.parameters()):
-            orig = recover_original(tensor.data.cpu().detach().numpy(), self.map_model[i])
+            orig = recover_original(tensor.data.cpu().detach().numpy(), self.model_weights_shuffle_idxs[i])
             orig_tensor = torch.tensor(orig)
 
             with torch.no_grad():
                 tensor.data = orig_tensor
 
-        self.map_model = None
+        self.model_weights_shuffle_idxs = None
 
     def obfuscate_model(self, seed:int = -1, override:bool = False):
         if not override and self.is_objuscated():
             logger.warning("Model has already been obfuscated. To re-obfuscate, set override=True.")
             return
 
-        map_model = self.change_weights(seed=seed)
-        obf_dict = model_obfuscation(self.model)
+        model_weights_shuffle_idxs = self.change_weights(seed=seed)
+        model_block_shuffle_map = model_obfuscation(self.model)
 
-        self.map_model = map_model
-        self.obf_dict = obf_dict
+        self.model_weights_shuffle_idxs = model_weights_shuffle_idxs
+        self.model_block_shuffle_map = model_block_shuffle_map
 
         return
     
@@ -129,30 +129,30 @@ class MTDModel:
             logger.warning("Model has not been obfuscated.")
             return
 
-        model_deobfuscation(self.model, self.obf_dict)
+        model_deobfuscation(self.model, self.model_block_shuffle_map)
         self.retrive_weights()
 
-        self.map_model = None
-        self.obf_dict = None
+        self.model_weights_shuffle_idxs = None
+        self.model_block_shuffle_map = None
 
     def save_mtd(self, file_path, map_path,model_map_path):
         with open(file_path,"wb") as f:
             pickle.dump(self.model,f)
         with open(map_path,"wb") as f:
-            pickle.dump(self.map_model,f)
+            pickle.dump(self.model_weights_shuffle_idxs,f)
         with open(model_map_path,"wb") as f:
-            pickle.dump(self.obf_dict,f)
+            pickle.dump(self.model_block_shuffle_map,f)
 
     @classmethod
     def load_mtd(cls, file_path,map_path,model_map_path):
         with open(model_map_path,"rb") as f:
-            obf_dict = pickle.load(f)
+            model_block_shuffle_map = pickle.load(f)
         with open(file_path,"rb") as f:
             model = pickle.load(f)
         with open(map_path,"rb") as f:
-            map_model = pickle.load(f)
+            model_weights_shuffle_idxs = pickle.load(f)
 
-        mtd_model = cls(model=model, map_model=map_model, obf_dict=obf_dict)
+        mtd_model = cls(model=model, model_weights_shuffle_idxs=model_weights_shuffle_idxs, model_block_shuffle_map=model_block_shuffle_map)
         return mtd_model
 
     def validate_model(self, other_model):

@@ -54,7 +54,7 @@ def model_obfuscation(model):
     return switch_dict
 
 def model_deobfuscation(model, obf_dict):
-    print(obf_dict)
+    logger.debug(f'Deobfuscating model with obf_dict: {obf_dict}')
     for key, data in obf_dict.items():
         for switch in data:
             # Switch the positions of two blocks in 'layer1' (e.g., blocks 0 and 3)

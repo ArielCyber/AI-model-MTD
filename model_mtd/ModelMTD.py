@@ -57,10 +57,11 @@ def model_deobfuscation(model, obf_dict):
             switch_blocks(model, target_layer=key, block_idx1=switch[0], block_idx2=switch[1])
 
 class MTDModel:
-    map_model = []
     def __init__(self, model_architecture=None):
         if model_architecture:
             self.model = model_architecture
+
+        self.map_model = []
 
     def load_model_pickle(self,file_path):
         with open(file_path,"rb") as f:

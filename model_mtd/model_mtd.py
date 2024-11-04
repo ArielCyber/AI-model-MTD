@@ -1,5 +1,5 @@
 import random
-from typing import IO, Union
+from typing import IO, Optional, Union
 import torch
 import torchvision.models as models
 from model_mtd.arr_shuffle import *
@@ -125,11 +125,11 @@ class MTDModel:
     def is_objuscated(self) -> bool:
         return self.model_weights_shuffle_idxs and self.model_block_shuffle_map
     
-    def _change_weights(self,seed):
+    def _change_weights(self,seed:Optional[int] = None):
         model_weights_shuffle_idxs = []
 
         for i, tensor in enumerate(self.model.parameters()):
-            shuffled, indices = shuffle(tensor.data.cpu().detach().numpy())
+            shuffled, indices = shuffle(tensor.data.cpu().detach().numpy(), seed=seed)
 
             model_weights_shuffle_idxs.append(indices)
 
@@ -155,7 +155,7 @@ class MTDModel:
 
         self.model_weights_shuffle_idxs = None
 
-    def obfuscate_model(self, seed:int = -1, override:bool = False):
+    def obfuscate_model(self, seed:Optional[int] = None, override:bool = False):
         if not override and self.is_objuscated():
             logger.warning("Model has already been obfuscated. To re-obfuscate, set override=True.")
             return

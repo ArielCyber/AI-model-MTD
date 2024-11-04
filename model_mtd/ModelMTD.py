@@ -1,7 +1,11 @@
 import torch
 import torchvision.models as models
 from model_mtd.ArrayRandomization import *
+from model_mtd.arr_shuffle import *
 import pickle
+
+import logging
+logger = logging.getLogger(__name__)
 
 def switch_blocks(model, target_layer, block_idx1, block_idx2):
     # Ensure the target_layer is valid
@@ -57,11 +61,10 @@ def model_deobfuscation(model, obf_dict):
             switch_blocks(model, target_layer=key, block_idx1=switch[0], block_idx2=switch[1])
 
 class MTDModel:
-    def __init__(self, model_architecture=None):
-        if model_architecture:
-            self.model = model_architecture
-
-        self.map_model = []
+    def __init__(self, model=None, map_model=None, obf_dict=None):
+        self.model = model
+        self.map_model = map_model
+        self.obf_dict = obf_dict
 
     def load_model_pickle(self,file_path):
         with open(file_path,"rb") as f:
@@ -71,64 +74,78 @@ class MTDModel:
         with open(file_path,"wb") as f:
             pickle.dump(self.model,f)
 
-    def change_weights(self,seed):
-        i = 0
-        for tensor in self.model.parameters():
-            i+=1
-            weight_list = tensor.data.tolist()
-
-
-            array_size = tensor.size()
-            array, indices = randomize(weight_list,seed)
-            self.map_model.append(indices)
-            new_weights_list = array
-            # Create an array of size 5x3
-
-            # Convert the list to a tensor
-            new_weights_tensor = torch.tensor(new_weights_list)
-            # Update the tensor with new values
-            with torch.no_grad():
-                tensor.data = new_weights_tensor
+    def is_objuscated(self) -> bool:
+        return self.map_model and self.obf_dict
     
-    def retrive_weights(self):
-        i = 0
-        for tensor in self.model.parameters():
-            i+=1
-            weight_list = tensor.data.tolist()
+    def change_weights(self,seed):
+        map_model = []
 
+        for i, tensor in enumerate(self.model.parameters()):
+            shuffled, indices = shuffle_all_axes(tensor.data.cpu().detach().numpy())
 
-            array_size = tensor.size()
-            array = retrieve(weight_list,self.map_model[i-1])
-            new_weights_list = array
-            # Create an array of size 5x3
+            map_model.append(indices)
 
-            # Convert the list to a tensor
-            new_weights_tensor = torch.tensor(new_weights_list)
-            # Update the tensor with new values
+            shuffled_tensor = torch.tensor(shuffled)
+
             with torch.no_grad():
-                tensor.data = new_weights_tensor
+                tensor.data = shuffled_tensor
 
-    def save_mtd(self, file_path, map_path,model_map_path, seed = -1):
-        self.change_weights(seed)
+        self.map_model = map_model
+        return map_model
+
+    def retrive_weights(self):
+        for i, tensor in enumerate(self.model.parameters()):
+            orig = recover_original(tensor.data.cpu().detach().numpy(), self.map_model[i])
+            orig_tensor = torch.tensor(orig)
+
+            with torch.no_grad():
+                tensor.data = orig_tensor
+
+        self.map_model = None
+
+    def obfuscate_model(self, seed:int = -1, override:bool = False):
+        if not override and self.is_objuscated():
+            logger.warning("Model has already been obfuscated. To re-obfuscate, set override=True.")
+            return
+
+        map_model = self.change_weights(seed=seed)
         obf_dict = model_obfuscation(self.model)
+
+        self.map_model = map_model
+        self.obf_dict = obf_dict
+
+        return
+    
+    def deobfuscate_model(self):
+        if not self.is_objuscated():
+            logger.warning("Model has not been obfuscated.")
+            return
+
+        model_deobfuscation(self.model, self.obf_dict)
+        self.retrive_weights()
+
+        self.map_model = None
+        self.obf_dict = None
+
+    def save_mtd(self, file_path, map_path,model_map_path):
         with open(file_path,"wb") as f:
             pickle.dump(self.model,f)
         with open(map_path,"wb") as f:
             pickle.dump(self.map_model,f)
         with open(model_map_path,"wb") as f:
-            pickle.dump(obf_dict,f)
+            pickle.dump(self.obf_dict,f)
 
-    def load_mtd(self, file_path,map_path,model_map_path):
-        obf_dict = None
+    @classmethod
+    def load_mtd(cls, file_path,map_path,model_map_path):
         with open(model_map_path,"rb") as f:
             obf_dict = pickle.load(f)
         with open(file_path,"rb") as f:
-            self.model = pickle.load(f)
+            model = pickle.load(f)
         with open(map_path,"rb") as f:
-            self.map_model = pickle.load(f)
-            
-        model_deobfuscation(self.model, obf_dict)    
-        self.retrive_weights()
+            map_model = pickle.load(f)
+
+        mtd_model = cls(model=model, map_model=map_model, obf_dict=obf_dict)
+        return mtd_model
 
     def validate_model(self, other_model):
         for p1, p2 in zip(self.model.parameters(), other_model.model.parameters()):

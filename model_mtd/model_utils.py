@@ -8,6 +8,10 @@ def load_weights_from_flattened_vector_torch(model: "torch.nn.Module", model_wei
         model_curr = torch.clone(model)
 
     state_dict = model_curr.state_dict()
+
+    if not isinstance(model_weights, torch.Tensor):
+        model_weights = torch.tensor(model_weights)
+
     torch.nn.utils.vector_to_parameters(model_weights, state_dict.values())
 
     model_curr.load_state_dict(state_dict)

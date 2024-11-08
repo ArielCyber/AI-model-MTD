@@ -1,11 +1,13 @@
+from abc import ABC, abstractmethod
 import random
-from typing import IO, Optional, Union
+from typing import IO, List, Literal, Optional, Union
 import io
 import torch
 import torchvision.models as models
 from model_mtd.arr_shuffle import *
 import pickle
 import hashlib
+
 
 from model_mtd.model_utils import extract_weights_torch, load_weights_from_flattened_vector_torch
 
@@ -95,8 +97,121 @@ def _torch_save(model, file_obj_or_path: Union[str, IO], close_file=True):
     if isinstance(file_obj_or_path, io.IOBase) and close_file:
         file_obj_or_path.close()
 
+class MTDObfuscationAction(ABC):
+    @abstractmethod
+    def obfuscate(self, model, **obf_kwargs) -> "model":
+        pass
+
+    @abstractmethod
+    def deobfuscate(self, model) -> "model":
+        pass
+
+class MTDObfuscationActionShuffleWeightsFlat(MTDObfuscationAction):
+    def obfuscate(self, model, **obf_kwargs):
+        seed = obf_kwargs.get('seed', None)
+
+        w = extract_weights_torch(model)
+        w_shuffled, indices = shuffle(w)
+
+        model = load_weights_from_flattened_vector_torch(model, w_shuffled, inplace=True)
+        return model, indices
+
+    def deobfuscate(self, model, indices):
+        w = extract_weights_torch(model)
+        w_orig = recover(w, indices)
+
+        model = load_weights_from_flattened_vector_torch(model, w_orig, inplace=True)
+        return model
+    
+class MTDObfuscationActionShuffleWeightsPerLayer(MTDObfuscationAction):
+    def obfuscate(self, model, **obf_kwargs):
+        seed = obf_kwargs.get('seed', None)
+
+        model_weights_shuffle_idxs = []
+
+        for i, tensor in enumerate(model.parameters()):
+            shuffled, indices = shuffle(tensor.data.cpu().detach().numpy(),  seed=seed)
+
+            model_weights_shuffle_idxs.append(indices)
+
+            shuffled_tensor = torch.tensor(shuffled)
+
+            with torch.no_grad():
+                tensor.data = shuffled_tensor
+
+        return model, model_weights_shuffle_idxs
+
+    def deobfuscate(self, model, model_weights_shuffle_idxs):
+        for i, tensor in enumerate(model.parameters()):
+            orig = recover(tensor.data.cpu().detach().numpy(), model_weights_shuffle_idxs[i])
+            orig_tensor = torch.tensor(orig)
+
+            with torch.no_grad():
+                tensor.data = orig_tensor
+
+        return model
+
+class MTDModelInnerState:
+    def __init__(self,
+                 obfuscation_actions: List[MTDObfuscationAction] = [],
+                 ):
+        
+        self.obfuscation_actions = obfuscation_actions
+        obfuscation_actions_artifacts = [None] * len(obfuscation_actions)
+        self.obfuscation_actions_artifacts = obfuscation_actions_artifacts
+
+        self.state:Literal['init', 'obfuscated', 'deobfuscated'] = 'init'
+
+    @classmethod
+    def ret_shuffle_weights_mtd(cls, shuffle_mode: Literal['flat', 'per_layer'] = 'flat'):
+        shuffle_obfuscation_action = MTDObfuscationActionShuffleWeightsFlat() if shuffle_mode == 'flat' else MTDObfuscationActionShuffleWeightsPerLayer()
+        return cls(obfuscation_actions=[shuffle_obfuscation_action])
+    
+    def is_obfuscated(self) -> bool:
+        return self.state == 'obfuscated'
+
+    def reset_state(self):
+        self.obfuscation_actions_artifacts = [None] * len(self.obfuscation_actions)
+
+    def obfuscate_model(self, model, seed:Optional[int] = None):
+        if self.is_obfuscated():
+            logger.warning("Model has already been obfuscated.")
+            return model
+
+        for i, action in enumerate(self.obfuscation_actions):
+            model, artifact = action.obfuscate(model, seed=seed)
+            self.obfuscation_actions_artifacts[i] = artifact
+
+        self.state = 'obfuscated'
+
+        return model
+    
+    def deobfuscate_model(self, model):
+        if not self.is_obfuscated():
+            logger.warning("Model has not been obfuscated.")
+            return model
+
+        for i, action in enumerate(reversed(self.obfuscation_actions)):
+            model = action.deobfuscate(model, self.obfuscation_actions_artifacts[i])
+
+        self.reset_state()
+
+        self.state = 'deobfuscated'
+
+        return model
+    
+    def save(self, file_obj_or_path: Union[str, IO], close_file=True):
+        _pickle_save(self, file_obj_or_path, close_file=close_file)
+
+    @classmethod
+    def load(cls, file_obj_or_path: Union[str, IO], close_file=True):
+        return _pickle_load(file_obj_or_path, close_file=close_file)
+
 class MTDModel:
-    def __init__(self, model=None, shuffle_weights=True, switch_blocks=False, model_weights_shuffle_idxs=None, model_block_shuffle_map=None):
+    def __init__(self, model=None,
+                mtd_inner_state: Optional[MTDModelInnerState] = None,
+                mtd_mode: Optional[Literal['shuffle_per_layer']] = 'shuffle_per_layer',
+                ):
         if model is None:
             logger.warning("Model is None. Please provide a model.")
             return
@@ -106,11 +221,16 @@ class MTDModel:
             raise NotImplementedError("Model is not an instance of torch.nn.Module. MTDModel currently only supports PyTorch models.")
 
         self.model = model
-        self.model_weights_shuffle_idxs = model_weights_shuffle_idxs
-        self.model_block_shuffle_map = model_block_shuffle_map
 
-        self.shuffle_weights = shuffle_weights or model_weights_shuffle_idxs
-        self.switch_blocks = switch_blocks or model_block_shuffle_map
+        if mtd_inner_state is not None:
+            self.mtd_inner_state = mtd_inner_state
+        else:
+            if mtd_mode == 'shuffle_flat':
+                self.mtd_inner_state = MTDModelInnerState.ret_shuffle_weights_mtd(shuffle_mode='flat')
+            elif mtd_mode == 'shuffle_per_layer':
+                self.mtd_inner_state = MTDModelInnerState.ret_shuffle_weights_mtd(shuffle_mode='per_layer')
+            else:
+                raise ValueError(f"Invalid mode: {mtd_mode}. Please choose from ['shuffle_flat', 'shuffle_per_layer']")
 
     @staticmethod
     def _load_model_pickle(file_obj_or_path: Union[str, IO], close_file=True):
@@ -123,115 +243,32 @@ class MTDModel:
         _pickle_save(model, file_obj_or_path, close_file=close_file)
         # _torch_save(model, file_obj_or_path, close_file=close_file)
 
-    @staticmethod
-    def _load_model_weights_shuffle_idxs_pickle(file_obj_or_path: Union[str, IO], close_file=True):
-        model_weights_shuffle_idxs = _pickle_load(file_obj_or_path, close_file=close_file)
-        return model_weights_shuffle_idxs
-    
-    @staticmethod
-    def _save_model_weights_shuffle_idxs_pickle(model_weights_shuffle_idxs, file_obj_or_path: Union[str, IO], close_file=True):
-        _pickle_save(model_weights_shuffle_idxs, file_obj_or_path, close_file=close_file)
-
-    @staticmethod
-    def _load_model_block_shuffle_map_pickle(file_obj_or_path: Union[str, IO], close_file=True):
-        model_block_shuffle_map = _pickle_load(file_obj_or_path, close_file=close_file)
-        return model_block_shuffle_map
-    
-    @staticmethod
-    def _save_model_block_shuffle_map_pickle(model_block_shuffle_map, file_obj_or_path: Union[str, IO], close_file=True):
-        _pickle_save(model_block_shuffle_map, file_obj_or_path, close_file=close_file)
-
-    
-    def is_objuscated(self) -> bool:
-        if not self.shuffle_weights and not self.switch_blocks:
-            logger.warning("Both shuffle_weights and switch_blocks are False. Model can't be obfuscated.")
-
-        return (not self.is_objuscated or self.model_weights_shuffle_idxs) and (not self.switch_blocks or self.model_block_shuffle_map)
-    
-    def _change_weights(self,seed:Optional[int] = None):
-        model_weights_shuffle_idxs = []
-
-        for i, tensor in enumerate(self.model.parameters()):
-            shuffled, indices = shuffle(tensor.data.cpu().detach().numpy(), seed=seed)
-
-            model_weights_shuffle_idxs.append(indices)
-
-            shuffled_tensor = torch.tensor(shuffled)
-
-            with torch.no_grad():
-                tensor.data = shuffled_tensor
-
-        self.model_weights_shuffle_idxs = model_weights_shuffle_idxs
-        return model_weights_shuffle_idxs
-
-    def _retrive_weights(self):
-        if not self.model_weights_shuffle_idxs:
-            logger.warning("Model weights have not been shuffled.")
-            return
-
-        for i, tensor in enumerate(self.model.parameters()):
-            orig = recover(tensor.data.cpu().detach().numpy(), self.model_weights_shuffle_idxs[i])
-            orig_tensor = torch.tensor(orig)
-
-            with torch.no_grad():
-                tensor.data = orig_tensor
-
-        self.model_weights_shuffle_idxs = None
-
     def obfuscate_model(self, seed:Optional[int] = None, override:bool = False):
-        if not override and self.is_objuscated():
-            logger.warning("Model has already been obfuscated. To re-obfuscate, set override=True.")
-            return
+        if override and self.mtd_inner_state.is_obfuscated():
+            self.model = self.mtd_inner_state.deobfuscate_model(self.model)
 
-        model_weights_shuffle_idxs = None
-        model_block_shuffle_map = None
-
-        if self.shuffle_weights:
-            model_weights_shuffle_idxs = self._change_weights(seed=seed)
-
-        if self.switch_blocks:
-            model_block_shuffle_map = model_obfuscation(self.model)
-
-        self.model_weights_shuffle_idxs = model_weights_shuffle_idxs
-        self.model_block_shuffle_map = model_block_shuffle_map
-
-        return
+        self.model = self.mtd_inner_state.obfuscate_model(self.model)
     
     def deobfuscate_model(self):
-        if not self.is_objuscated():
-            logger.warning("Model has not been obfuscated.")
-            return
-
-        if self.switch_blocks:
-            model_deobfuscation(self.model, self.model_block_shuffle_map)
-
-        if self.shuffle_weights:
-            self._retrive_weights()
-
-        self.model_weights_shuffle_idxs = None
-        self.model_block_shuffle_map = None
+        self.model = self.mtd_inner_state.deobfuscate_model(self.model)
 
     def save_mtd(self, 
                 model_file_or_path: Union[str, IO],
-                model_weights_shuffle_idxs_file_or_path: Union[str, IO],
-                model_block_shuffle_map_file_or_path: Union[str, IO],
+                mtd_inner_state_file_or_path: Union[str, IO],
                 close_files=True):
         
         self._save_model_pickle(self.model, model_file_or_path, close_file=close_files)
-        self._save_model_weights_shuffle_idxs_pickle(self.model_weights_shuffle_idxs, model_weights_shuffle_idxs_file_or_path, close_file=close_files)
-        self._save_model_block_shuffle_map_pickle(self.model_block_shuffle_map, model_block_shuffle_map_file_or_path, close_file=close_files)
+        self.mtd_inner_state.save(mtd_inner_state_file_or_path, close_file=close_files)
 
     @classmethod
     def load_mtd(cls,
                 model_file_or_path: Union[str, IO],
-                model_weights_shuffle_idxs_file_or_path: Union[str, IO],
-                model_block_shuffle_map_file_or_path: Union[str, IO],
+                mtd_inner_state_file_or_path: Union[str, IO],
                 close_files=True):
         model = cls._load_model_pickle(model_file_or_path, close_file=close_files)
-        model_weights_shuffle_idxs = cls._load_model_weights_shuffle_idxs_pickle(model_weights_shuffle_idxs_file_or_path, close_file=close_files)
-        model_block_shuffle_map = cls._load_model_block_shuffle_map_pickle(model_block_shuffle_map_file_or_path, close_file=close_files)
+        mtd_inner_state = MTDModelInnerState.load(mtd_inner_state_file_or_path, close_file=close_files)
 
-        mtd_model = cls(model=model, model_weights_shuffle_idxs=model_weights_shuffle_idxs, model_block_shuffle_map=model_block_shuffle_map)
+        mtd_model = cls(model=model, mtd_inner_state=mtd_inner_state)
         return mtd_model
 
     def model_hash(self):
@@ -249,4 +286,4 @@ class MTDModel:
                 return False
         return True
     
-__all__ = ["MTDModel"]
+__all__ = ["MTDModel", "MTDObfuscationActionShuffleWeightsFlat", "MTDObfuscationActionShuffleWeightsPerLayer", "MTDModelInnerState"]

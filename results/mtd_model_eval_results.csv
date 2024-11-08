@@ -1,0 +1,13 @@
+model_name,model_state,ds,acc_top1,acc_top5
+alexnet,initial,imagenet12_val,56.548,79.088
+alexnet,after_obfuscation,imagenet12_val,0.1,0.5
+alexnet,after_deobfuscation,imagenet12_val,56.548,79.088
+resnet18,initial,imagenet12_val,69.758,89.074
+resnet18,after_obfuscation,imagenet12_val,0.158,0.508
+resnet18,after_deobfuscation,imagenet12_val,69.758,89.074
+convnext_base,initial,imagenet12_val,84.062,96.878
+convnext_base,after_obfuscation,imagenet12_val,0.104,0.532
+convnext_base,after_deobfuscation,imagenet12_val,84.062,96.878
+densenet169,initial,imagenet12_val,75.584,92.808
+densenet169,after_obfuscation,imagenet12_val,0.1,0.5
+densenet169,after_deobfuscation,imagenet12_val,75.584,92.808

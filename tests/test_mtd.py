@@ -35,26 +35,30 @@ def _test_single_torch_model(model: "torch.nn.Module", model_name: Optional[str]
 
     def _test_save_load(mtd: MTDModel):
         model_vfile = io.BytesIO()
-        model_weights_shuffle_idxs_vfile = io.BytesIO()
-        model_block_shuffle_map_vfile = io.BytesIO()
+        # model_weights_shuffle_idxs_vfile = io.BytesIO()
+        # model_block_shuffle_map_vfile = io.BytesIO()
+        mtd_inner_state_file_or_path = io.BytesIO()
 
         hash_before = mtd.model_hash()
 
         mtd.save_mtd(
             model_file_or_path=model_vfile,
-            model_weights_shuffle_idxs_file_or_path=model_weights_shuffle_idxs_vfile,
-            model_block_shuffle_map_file_or_path=model_block_shuffle_map_vfile,
+            # model_weights_shuffle_idxs_file_or_path=model_weights_shuffle_idxs_vfile,
+            # model_block_shuffle_map_file_or_path=model_block_shuffle_map_vfile,
+            mtd_inner_state_file_or_path=mtd_inner_state_file_or_path,
             close_files=False,
         )
 
         model_vfile.seek(0)
-        model_weights_shuffle_idxs_vfile.seek(0)
-        model_block_shuffle_map_vfile.seek(0)
+        # model_weights_shuffle_idxs_vfile.seek(0)
+        # model_block_shuffle_map_vfile.seek(0)
+        mtd_inner_state_file_or_path.seek(0)
 
         mtd_loaded = MTDModel.load_mtd(
             model_file_or_path=model_vfile,
-            model_weights_shuffle_idxs_file_or_path=model_weights_shuffle_idxs_vfile,
-            model_block_shuffle_map_file_or_path=model_block_shuffle_map_vfile,
+            # model_weights_shuffle_idxs_file_or_path=model_weights_shuffle_idxs_vfile,
+            # model_block_shuffle_map_file_or_path=model_block_shuffle_map_vfile,
+            mtd_inner_state_file_or_path=mtd_inner_state_file_or_path,
             close_files=False,
         )
 

@@ -5,6 +5,9 @@ import torch
 import torchvision.models as models
 from model_mtd.arr_shuffle import *
 import pickle
+import hashlib
+
+from model_mtd.model_utils import extract_weights_torch, load_weights_from_flattened_vector_torch
 
 import logging
 logger = logging.getLogger(__name__)
@@ -111,14 +114,14 @@ class MTDModel:
 
     @staticmethod
     def _load_model_pickle(file_obj_or_path: Union[str, IO], close_file=True):
-        # model = _pickle_load(file_obj_or_path, close_file=close_file)
-        model = _torch_load(file_obj_or_path, close_file=close_file)
+        model = _pickle_load(file_obj_or_path, close_file=close_file)
+        # model = _torch_load(file_obj_or_path, close_file=close_file)
         return model
             
     @staticmethod
     def _save_model_pickle(model, file_obj_or_path: Union[str, IO], close_file=True):
-        # _pickle_save(model, file_obj_or_path, close_file=close_file)
-        _torch_save(model, file_obj_or_path, close_file=close_file)
+        _pickle_save(model, file_obj_or_path, close_file=close_file)
+        # _torch_save(model, file_obj_or_path, close_file=close_file)
 
     @staticmethod
     def _load_model_weights_shuffle_idxs_pickle(file_obj_or_path: Union[str, IO], close_file=True):
@@ -230,6 +233,12 @@ class MTDModel:
 
         mtd_model = cls(model=model, model_weights_shuffle_idxs=model_weights_shuffle_idxs, model_block_shuffle_map=model_block_shuffle_map)
         return mtd_model
+
+    def model_hash(self):
+        w = extract_weights_torch(self.model)
+
+        hash = hashlib.sha256(w.tobytes()).hexdigest()
+        return hash
 
     def __eq__(self, value):
         return self.validate_model(value)

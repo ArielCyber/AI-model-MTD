@@ -1,0 +1,20 @@
+import numpy as np
+
+def load_weights_from_flattened_vector_torch(model: "torch.nn.Module", model_weights: np.ndarray, inplace: bool = False) -> "torch.nn.Module":
+    import torch
+    if inplace:
+        model_curr = model
+    else:
+        model_curr = torch.clone(model)
+
+    state_dict = model_curr.state_dict()
+    torch.nn.utils.vector_to_parameters(model_weights, state_dict.values())
+
+    model_curr.load_state_dict(state_dict)
+    return model_curr
+
+def extract_weights_torch(model: "torch.nn.Module") -> np.ndarray:
+    ws = [w.cpu().detach().numpy().flatten() for w in model.parameters()]
+    w = np.concatenate(ws)
+
+    return w

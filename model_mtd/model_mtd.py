@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import gc
 import random
 from typing import IO, List, Literal, Optional, Union
 import io
@@ -101,6 +102,10 @@ def torch_model_hash(model):
     w = extract_weights_torch(model)
 
     hash = hashlib.sha256(w.tobytes()).hexdigest()
+
+    del w
+    gc.collect()
+
     return hash
 
 class MTDObfuscationAction(ABC):
@@ -117,7 +122,7 @@ class MTDObfuscationActionShuffleWeightsFlat(MTDObfuscationAction):
         seed = obf_kwargs.get('seed', None)
 
         w = extract_weights_torch(model)
-        w_shuffled, indices = shuffle(w)
+        w_shuffled, indices = shuffle(w, seed=seed)
 
         model = load_weights_from_flattened_vector_torch(model, w_shuffled, inplace=True)
         return model, indices
@@ -215,7 +220,7 @@ class MTDModelInnerState:
 class MTDModel:
     def __init__(self, model=None,
                 mtd_inner_state: Optional[MTDModelInnerState] = None,
-                mtd_mode: Optional[Literal['shuffle_per_layer', 'shuffle_flat']] = 'shuffle_flat',
+                mtd_mode: Optional[Literal['shuffle_per_layer', 'shuffle_flat']] = 'shuffle_per_layer',
                 ):
         if model is None:
             logger.warning("Model is None. Please provide a model.")
@@ -239,14 +244,14 @@ class MTDModel:
 
     @staticmethod
     def _load_model_pickle(file_obj_or_path: Union[str, IO], close_file=True):
-        model = _pickle_load(file_obj_or_path, close_file=close_file)
-        # model = _torch_load(file_obj_or_path, close_file=close_file)
+        # model = _pickle_load(file_obj_or_path, close_file=close_file)
+        model = _torch_load(file_obj_or_path, close_file=close_file)
         return model
             
     @staticmethod
     def _save_model_pickle(model, file_obj_or_path: Union[str, IO], close_file=True):
-        _pickle_save(model, file_obj_or_path, close_file=close_file)
-        # _torch_save(model, file_obj_or_path, close_file=close_file)
+        # _pickle_save(model, file_obj_or_path, close_file=close_file)
+        _torch_save(model, file_obj_or_path, close_file=close_file)
 
     def obfuscate_model(self, seed:Optional[int] = None, override:bool = False):
         if override and self.mtd_inner_state.is_obfuscated():

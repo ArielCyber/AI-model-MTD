@@ -1,10 +1,23 @@
+import random
 from typing import List, Optional, Tuple, Union
 import io
 import copy
 
 from model_mtd.model_mtd import MTDModel
+from model_mtd.model_utils import extract_weights_torch, load_weights_from_flattened_vector_torch
 
 import pytest
+
+def _change_one_random_weight(weights):
+    np = pytest.importorskip("numpy")
+    rng = np.random.default_rng()
+
+    weights = weights.copy()
+
+    idx = random.randint(0, len(weights) - 1)
+    weights[idx] += rng.random(dtype=weights.dtype)
+
+    return weights
 
 def _test_single_torch_model(model: "torch.nn.Module", model_name: Optional[str] = None):
     torch = pytest.importorskip("torch")
@@ -35,37 +48,64 @@ def _test_single_torch_model(model: "torch.nn.Module", model_name: Optional[str]
 
     def _test_save_load(mtd: MTDModel):
         model_vfile = io.BytesIO()
-        # model_weights_shuffle_idxs_vfile = io.BytesIO()
-        # model_block_shuffle_map_vfile = io.BytesIO()
         mtd_inner_state_file_or_path = io.BytesIO()
 
+        """
+            Check valid save/load
+        """
         hash_before = mtd.model_hash()
 
         mtd.save_mtd(
             model_file_or_path=model_vfile,
-            # model_weights_shuffle_idxs_file_or_path=model_weights_shuffle_idxs_vfile,
-            # model_block_shuffle_map_file_or_path=model_block_shuffle_map_vfile,
             mtd_inner_state_file_or_path=mtd_inner_state_file_or_path,
             close_files=False,
         )
 
         model_vfile.seek(0)
-        # model_weights_shuffle_idxs_vfile.seek(0)
-        # model_block_shuffle_map_vfile.seek(0)
         mtd_inner_state_file_or_path.seek(0)
 
         mtd_loaded = MTDModel.load_mtd(
             model_file_or_path=model_vfile,
-            # model_weights_shuffle_idxs_file_or_path=model_weights_shuffle_idxs_vfile,
-            # model_block_shuffle_map_file_or_path=model_block_shuffle_map_vfile,
             mtd_inner_state_file_or_path=mtd_inner_state_file_or_path,
             close_files=False,
+
+            validate_hash=True,
         )
+
+        assert mtd_loaded is not None, f"Model {model_name} not loaded correctly."
 
         hash_after = mtd_loaded.model_hash()
 
         assert mtd == mtd_loaded, f"Model {model_name} not loaded correctly."
         assert hash_before == hash_after, f"Model {model_name} hash does not match after loading."
+
+        """
+            Check load validation
+        """
+        del mtd_loaded
+
+        w = extract_weights_torch(mtd.model)
+        w_changed = _change_one_random_weight(w)
+        load_weights_from_flattened_vector_torch(mtd.model, w_changed, inplace=True)
+
+        model_vfile.seek(0)
+        mtd_inner_state_file_or_path.seek(0)
+
+        MTDModel._save_model_pickle(mtd.model, model_vfile, close_file=False)
+        model_vfile.seek(0)
+
+        mtd_loaded_new = MTDModel.load_mtd(
+            model_file_or_path=model_vfile,
+            mtd_inner_state_file_or_path=mtd_inner_state_file_or_path,
+            close_files=False,
+
+            validate_hash=True,
+        )
+        assert mtd_loaded_new is None, f"Attacked Model {model_name} should not be loaded."
+
+
+        model_vfile.close()
+        mtd_inner_state_file_or_path.close()
 
 
     model_mtd = MTDModel(model=model)

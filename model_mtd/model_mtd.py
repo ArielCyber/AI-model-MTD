@@ -97,6 +97,12 @@ def _torch_save(model, file_obj_or_path: Union[str, IO], close_file=True):
     if isinstance(file_obj_or_path, io.IOBase) and close_file:
         file_obj_or_path.close()
 
+def torch_model_hash(model):
+    w = extract_weights_torch(model)
+
+    hash = hashlib.sha256(w.tobytes()).hexdigest()
+    return hash
+
 class MTDObfuscationAction(ABC):
     @abstractmethod
     def obfuscate(self, model, **obf_kwargs) -> "model":
@@ -177,7 +183,7 @@ class MTDModelInnerState:
         if self.is_obfuscated():
             logger.warning("Model has already been obfuscated.")
             return model
-
+        
         for i, action in enumerate(self.obfuscation_actions):
             model, artifact = action.obfuscate(model, seed=seed)
             self.obfuscation_actions_artifacts[i] = artifact
@@ -195,7 +201,6 @@ class MTDModelInnerState:
             model = action.deobfuscate(model, self.obfuscation_actions_artifacts[i])
 
         self.reset_state()
-
         self.state = 'deobfuscated'
 
         return model
@@ -210,7 +215,7 @@ class MTDModelInnerState:
 class MTDModel:
     def __init__(self, model=None,
                 mtd_inner_state: Optional[MTDModelInnerState] = None,
-                mtd_mode: Optional[Literal['shuffle_per_layer']] = 'shuffle_per_layer',
+                mtd_mode: Optional[Literal['shuffle_per_layer', 'shuffle_flat']] = 'shuffle_flat',
                 ):
         if model is None:
             logger.warning("Model is None. Please provide a model.")
@@ -247,7 +252,7 @@ class MTDModel:
         if override and self.mtd_inner_state.is_obfuscated():
             self.model = self.mtd_inner_state.deobfuscate_model(self.model)
 
-        self.model = self.mtd_inner_state.obfuscate_model(self.model)
+        self.model = self.mtd_inner_state.obfuscate_model(self.model, seed=seed)
     
     def deobfuscate_model(self):
         self.model = self.mtd_inner_state.deobfuscate_model(self.model)
@@ -257,6 +262,9 @@ class MTDModel:
                 mtd_inner_state_file_or_path: Union[str, IO],
                 close_files=True):
         
+        hash_before_serialization = self.model_hash()
+        self.mtd_inner_state.hash_before_serialization = hash_before_serialization
+        
         self._save_model_pickle(self.model, model_file_or_path, close_file=close_files)
         self.mtd_inner_state.save(mtd_inner_state_file_or_path, close_file=close_files)
 
@@ -264,26 +272,32 @@ class MTDModel:
     def load_mtd(cls,
                 model_file_or_path: Union[str, IO],
                 mtd_inner_state_file_or_path: Union[str, IO],
-                close_files=True):
+                close_files=True,
+                validate_hash:bool = False
+                ):
         model = cls._load_model_pickle(model_file_or_path, close_file=close_files)
         mtd_inner_state = MTDModelInnerState.load(mtd_inner_state_file_or_path, close_file=close_files)
+
+        if validate_hash:
+            hash_before_serialization = mtd_inner_state.hash_before_serialization
+            hash_after_serialization = torch_model_hash(model)
+            if hash_before_serialization != hash_after_serialization:
+                logger.warning("Model hash mismatch after loading. Model may have been tampered with.")
+                return None
 
         mtd_model = cls(model=model, mtd_inner_state=mtd_inner_state)
         return mtd_model
 
     def model_hash(self):
-        w = extract_weights_torch(self.model)
-
-        hash = hashlib.sha256(w.tobytes()).hexdigest()
-        return hash
+        return torch_model_hash(self.model)
 
     def __eq__(self, value):
-        return self.validate_model(value)
-
-    def validate_model(self, other_model):
-        for p1, p2 in zip(self.model.parameters(), other_model.model.parameters()):
+        for p1, p2 in zip(self.model.parameters(), value.model.parameters()):
             if not torch.allclose(p1.data, p2.data, atol=1e-4):
                 return False
         return True
+
+    # def validate_model(self, other_model):
+        
     
 __all__ = ["MTDModel", "MTDObfuscationActionShuffleWeightsFlat", "MTDObfuscationActionShuffleWeightsPerLayer", "MTDModelInnerState"]

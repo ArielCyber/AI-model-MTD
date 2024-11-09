@@ -7,14 +7,11 @@ def load_weights_from_flattened_vector_torch(model: "torch.nn.Module", model_wei
     else:
         model_curr = torch.clone(model)
 
-    state_dict = model_curr.state_dict()
-
     if not isinstance(model_weights, torch.Tensor):
-        model_weights = torch.tensor(model_weights)
+        model_weights = torch.from_numpy(model_weights)
 
-    torch.nn.utils.vector_to_parameters(model_weights, state_dict.values())
+    torch.nn.utils.vector_to_parameters(model_weights, model_curr.parameters())
 
-    model_curr.load_state_dict(state_dict)
     return model_curr
 
 def extract_weights_torch(model: "torch.nn.Module") -> np.ndarray:

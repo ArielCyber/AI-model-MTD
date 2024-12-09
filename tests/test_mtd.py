@@ -152,12 +152,7 @@ def _test_torch_mtd_vision(module, torchvision_module, model_name_prefix:str="",
 def test_torch_mtd_vision_classification():
     torchvision = pytest.importorskip("torchvision")
 
-    exclude = [
-        'regnet_y_128gf',
-        'vit_h_14',
-    ]
-
-    _test_torch_mtd_vision(torchvision.models, torchvision, model_name_prefix="classification: ", exclude_models=exclude)
+    _test_torch_mtd_vision(torchvision.models, torchvision, model_name_prefix="classification: ")
 
 @pytest.mark.filterwarnings("ignore::FutureWarning")
 def test_torch_mtd_vision_quantization():

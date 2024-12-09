@@ -1,5 +1,3 @@
-# https://image-net.org/data/ILSVRC/2012/ILSVRC2012_devkit_t12.tar.gz
-
 import gc
 import os
 from typing import Optional

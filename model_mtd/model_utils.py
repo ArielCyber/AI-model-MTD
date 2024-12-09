@@ -19,3 +19,13 @@ def extract_weights_torch(model: "torch.nn.Module") -> np.ndarray:
     w = np.concatenate(ws)
 
     return w
+
+def get_num_weights_torch(model: "torch.nn.Module") -> int:
+    s = 0
+    for i, tensor in enumerate(model.parameters()):
+        s += tensor.numel()
+
+    return s
+
+def get_weights_dtype_torch(model: "torch.nn.Module") -> np.dtype:
+    return next(model.parameters()).dtype

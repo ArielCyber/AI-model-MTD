@@ -162,6 +162,31 @@ class MTDObfuscationActionShuffleWeightsPerLayer(MTDObfuscationAction):
 
         return model
 
+class MTDObfuscationActionShuffleWeightsTorch(MTDObfuscationAction):
+    def obfuscate(self, model, **obf_kwargs):
+        model_weights_shuffle_idxs = []
+        seed = obf_kwargs.get('seed', None)
+
+        for i, tensor in enumerate(model.parameters()):
+            # pass
+            shuffled, indices = shuffle_torch(tensor.data, seed=seed)
+            model_weights_shuffle_idxs.append(indices)
+
+            with torch.no_grad():
+                tensor.data = shuffled
+
+        return model, model_weights_shuffle_idxs
+
+    def deobfuscate(self, model, indices):
+        for i, tensor in enumerate(model.parameters()):
+            # pass
+            orig = recover_torch(tensor.data, indices[i])
+            with torch.no_grad():
+                tensor.data = orig
+
+        return model
+            
+
 class MTDModelInnerState:
     def __init__(self,
                  obfuscation_actions: List[MTDObfuscationAction] = [],
@@ -220,7 +245,7 @@ class MTDModelInnerState:
 class MTDModel:
     def __init__(self, model=None,
                 mtd_inner_state: Optional[MTDModelInnerState] = None,
-                mtd_mode: Optional[Literal['shuffle_per_layer', 'shuffle_flat']] = 'shuffle_per_layer',
+                mtd_mode: Optional[Literal['shuffle_per_layer', 'shuffle_flat', 'shuffle_per_layer_torch']] = 'shuffle_per_layer_torch',
                 ):
         if model is None:
             logger.warning("Model is None. Please provide a model.")
@@ -239,8 +264,12 @@ class MTDModel:
                 self.mtd_inner_state = MTDModelInnerState.ret_shuffle_weights_mtd(shuffle_mode='flat')
             elif mtd_mode == 'shuffle_per_layer':
                 self.mtd_inner_state = MTDModelInnerState.ret_shuffle_weights_mtd(shuffle_mode='per_layer')
+            elif mtd_mode == 'shuffle_per_layer_torch':
+                self.mtd_inner_state = MTDModelInnerState(obfuscation_actions=[MTDObfuscationActionShuffleWeightsTorch()])
             else:
                 raise ValueError(f"Invalid mode: {mtd_mode}. Please choose from ['shuffle_flat', 'shuffle_per_layer']")
+
+        logger.debug(f"MTDModel initialized with mode: {mtd_mode}")
 
     @staticmethod
     def _load_model_pickle(file_obj_or_path: Union[str, IO], close_file=True):
@@ -253,14 +282,32 @@ class MTDModel:
         # _pickle_save(model, file_obj_or_path, close_file=close_file)
         _torch_save(model, file_obj_or_path, close_file=close_file)
 
-    def obfuscate_model(self, seed:Optional[int] = None, override:bool = False):
+    def obfuscate_model(self, seed:Optional[int] = None, override:bool = False, keep_hashes:bool = False):
         if override and self.mtd_inner_state.is_obfuscated():
             self.model = self.mtd_inner_state.deobfuscate_model(self.model)
 
+        if keep_hashes:
+            hash_before_obfuscation = self.model_hash()
+            self.mtd_inner_state.hash_before_obfuscation = hash_before_obfuscation
+            self.mtd_inner_state.hash_after_obfuscation = None
+
         self.model = self.mtd_inner_state.obfuscate_model(self.model, seed=seed)
+
+        if keep_hashes:
+            hash_after_obfuscation = self.model_hash()
+            self.mtd_inner_state.hash_after_obfuscation = hash_after_obfuscation
+            if hash_before_obfuscation == hash_after_obfuscation:
+                logger.warning("Model hash before and after obfuscation are the same. Model may not have been obfuscated.")
+                return None
     
-    def deobfuscate_model(self):
+    def deobfuscate_model(self, validate_hash:bool = False):
         self.model = self.mtd_inner_state.deobfuscate_model(self.model)
+        if validate_hash:
+            hash_after_deobfuscation = self.model_hash()
+            hash_before_obfuscation = self.mtd_inner_state.hash_before_obfuscation
+            if hash_after_deobfuscation != hash_before_obfuscation:
+                logger.warning("Model hash mismatch after deobfuscation. Model may have been tampered with.")
+                return None
 
     def save_mtd(self, 
                 model_file_or_path: Union[str, IO],
@@ -304,5 +351,55 @@ class MTDModel:
 
     # def validate_model(self, other_model):
         
-    
+
+
+class CRYPTOModel(MTDModel):
+    def __init__(self, model=None):
+        from cryptography.fernet import Fernet
+
+        if model is None:
+            logger.warning("Model is None. Please provide a model.")
+            return
+        
+        if not isinstance(model, torch.nn.Module):
+            logger.warning("Model is not an instance of torch.nn.Module. MTDModel currently only supports PyTorch models.")
+            raise NotImplementedError("Model is not an instance of torch.nn.Module. MTDModel currently only supports PyTorch models.")
+
+        self.model = model
+
+        key = Fernet.generate_key()
+        fernet = Fernet(key)
+        self.key = key
+        self.fernet = fernet
+
+    def encrypt_model(self):
+        hash_before_serialization = self.model_hash()
+
+        vfile = io.BytesIO()
+        self._save_model_pickle(self.model, vfile, close_file=False)
+        vfile.seek(0)
+        encrypted_model = self.fernet.encrypt(vfile.read())
+        vfile.close()
+
+        self.encrypted_model = encrypted_model
+        self.hash_before_serialization = hash_before_serialization
+        return encrypted_model
+
+    def decrypt_model(self):
+        # Implement decryption logic here
+        key = self.key
+        fernet = self.fernet
+
+        decrypted_model = fernet.decrypt(self.encrypted_model)
+        vfile = io.BytesIO(decrypted_model)
+        vfile.seek(0)
+        decrypted_model = MTDModel._load_model_pickle(vfile, close_file=True)
+
+        hash_after_serialization = torch_model_hash(decrypted_model)
+        if self.hash_before_serialization != hash_after_serialization:
+            logger.warning("Model hash mismatch after decryption. Model may have been tampered with.")
+            return None
+        self.model = decrypted_model
+        return decrypted_model
+
 __all__ = ["MTDModel", "MTDObfuscationActionShuffleWeightsFlat", "MTDObfuscationActionShuffleWeightsPerLayer", "MTDModelInnerState"]

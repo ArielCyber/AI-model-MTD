@@ -1,3 +1,4 @@
+import copy
 import gc
 import os
 from typing import Optional
@@ -9,45 +10,76 @@ import torchvision.models as models
 import tqdm
 import pandas as pd
 
-from model_mtd.model_mtd import MTDModel
+import logging
+import sys
+
+root = logging.getLogger()
+root.setLevel(logging.WARNING)
+
+handler = logging.StreamHandler(sys.stdout)
+handler.setLevel(logging.WARNING)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+root.addHandler(handler)
+
+from model_mtd.model_mtd import MTDModel, CRYPTOModel
 
 import time
 import io
 
 from functools import partial
 
+
+
+def timeit(func, *args, **kwargs):
+    start_time = time.time()
+    result = func(*args, **kwargs)
+    end_time = time.time()
+        
+    elapsed_time = end_time - start_time
+    return elapsed_time, result
+
 def mtd_time(model):
+    model_cp = copy.deepcopy(model.to('cpu'))
+
+    """
+        Regular Save
+    """
+    model_vfile = io.BytesIO()
+
+    time_save_reg, _ = timeit(MTDModel._save_model_pickle, model_cp, model_vfile, close_file=False)
+
+    """
+        Regular Load
+    """
+
+    model_vfile.seek(0)
+
+    time_load_reg, _ = timeit(MTDModel._load_model_pickle, model_vfile, close_file=False)
+    model_vfile.close()
+
+    ret_dict = {
+        'time_save_reg': time_save_reg,
+        'time_load_reg': time_load_reg
+    }
+
     """
         MTD construction
     """
-    time_start_construct = time.time()
-
-    mtd_model = MTDModel(model)
-
-    time_end_construct = time.time()
-    time_construct = time_end_construct - time_start_construct
+    model_cp = copy.deepcopy(model.to('cpu'))
+    time_construct, mtd_model = timeit(MTDModel, model_cp)
 
     """
         MTD obfuscation
     """
 
-    time_start_obfuscate = time.time()
-
-    mtd_model.obfuscate_model()
-
-    time_end_obfuscate = time.time()
-    time_obfuscate = time_end_obfuscate - time_start_obfuscate
+    time_obfuscate, _ = timeit(MTDModel.obfuscate_model, mtd_model)
 
     """
         MTD deobfuscation
     """
 
-    time_start_deobfuscate = time.time()
-
-    mtd_model.deobfuscate_model()
-
-    time_end_deobfuscate = time.time()
-    time_deobfuscate = time_end_deobfuscate - time_start_deobfuscate
+    time_deobfuscate, _ = timeit(MTDModel.deobfuscate_model, mtd_model)
 
     """
         MTD save
@@ -56,12 +88,7 @@ def mtd_time(model):
     model_vfile = io.BytesIO()
     mtd_inner_state_vfile = io.BytesIO()
 
-    time_start_save = time.time()
-
-    mtd_model.save_mtd(model_vfile, mtd_inner_state_vfile, close_files=False)
-
-    time_end_save = time.time()
-    time_save = time_end_save - time_start_save
+    time_save_mtd, _ = timeit(MTDModel.save_mtd, mtd_model, model_vfile, mtd_inner_state_vfile, close_files=False)
 
     """
         MTD load
@@ -70,23 +97,41 @@ def mtd_time(model):
     model_vfile.seek(0)
     mtd_inner_state_vfile.seek(0)
 
-    time_start_load = time.time()
-
-    MTDModel.load_mtd(model_vfile, mtd_inner_state_vfile)
-
-    time_end_load = time.time()
-    time_load = time_end_load - time_start_load
+    time_load_mtd, _ = timeit(MTDModel.load_mtd, model_vfile, mtd_inner_state_vfile)
 
     model_vfile.close()
     mtd_inner_state_vfile.close()
 
-    ret_dict = {
-        'time_construct': time_construct,
-        'time_obfuscate': time_obfuscate,
-        'time_deobfuscate': time_deobfuscate,
-        'time_save': time_save,
-        'time_load': time_load
-    }
+    ret_dict.update({
+        'time_construct_mtd': time_construct,
+        'time_obfuscate_mtd': time_obfuscate,
+        'time_deobfuscate_mtd': time_deobfuscate,
+        'time_save_mtd': time_save_mtd,
+        'time_load_mtd': time_load_mtd
+    })
+
+    """
+        CRYPTOModel
+    """
+
+    model_cp = copy.deepcopy(model.to('cpu'))
+    crypt_model = CRYPTOModel(model_cp)
+
+    """
+        CRYPT ENCRYPTION
+    """
+
+    time_encrypt_encrypt, _ = timeit(CRYPTOModel.encrypt_model, crypt_model)
+
+    """
+        CRYPT DECRYPTION
+    """
+    time_decrypt_encrypt, _ = timeit(CRYPTOModel.decrypt_model, crypt_model)
+
+    ret_dict.update({
+        'time_encrypt_crypto': time_encrypt_encrypt,
+        'time_decrypt_crypto': time_decrypt_encrypt
+    })
 
     return ret_dict
 
@@ -96,6 +141,7 @@ if __name__ == '__main__':
     dfs = []
 
     for model_name in tqdm.tqdm(torchvision.models.list_models()):
+    # for model_name in tqdm.tqdm(['vgg11',]):
         model = torchvision.models.get_model(model_name, weights="DEFAULT")
 
         model_n_weights = get_num_weights_torch(model)
@@ -121,4 +167,4 @@ if __name__ == '__main__':
     results_dir = './results'
     os.makedirs(results_dir, exist_ok=True)
 
-    df.to_csv(os.path.join(results_dir, 'mtd_model_time_results.csv'), index=False)
+    df.to_csv(os.path.join(results_dir, 'mtd_model_time_results_saveload_all.csv'), index=False)
